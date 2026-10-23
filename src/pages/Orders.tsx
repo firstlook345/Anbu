@@ -1,4 +1,3 @@
-
 import { useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { firestoreDb } from "../firebase";
@@ -28,6 +27,10 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Button } from "../components/ui/button";
+
+// Only this email can see every customer's orders.
+// IMPORTANT: also enforce this in Firestore Security Rules.
+const ADMIN_EMAIL = "anbuennumnan@gmail.com";
 
 type OrderStatus =
   | "Pending"
@@ -159,10 +162,7 @@ function parseOrder(id: string, data: DocumentData): Order {
     createdAt = rawDate.toDate().toISOString();
   } else if (typeof rawDate === "string") {
     createdAt = rawDate;
-  } else if (
-    rawDate &&
-    typeof rawDate.toDate === "function"
-  ) {
+  } else if (rawDate && typeof rawDate.toDate === "function") {
     createdAt = rawDate.toDate().toISOString();
   }
 
@@ -196,9 +196,7 @@ function parseOrder(id: string, data: DocumentData): Order {
     _id: id,
     userId: String(data.userId ?? ""),
     userEmail:
-      typeof data.userEmail === "string"
-        ? data.userEmail
-        : undefined,
+      typeof data.userEmail === "string" ? data.userEmail : undefined,
     items,
     totalPrice: Number(data.totalPrice ?? 0),
     status,
@@ -214,8 +212,11 @@ function parseOrder(id: string, data: DocumentData): Order {
 const Orders = () => {
   const { user, isLoading: authLoading } = useAuth();
 
-  // This depends on the isAdmin property provided by AuthContext.
-  const isAdmin = user?.isAdmin === true;
+  // Step 1: check the signed-in email first.
+  // Admin email  -> sees ALL orders.
+  // Anyone else  -> sees only orders whose userId equals their Firebase UID.
+  const userEmail = user?.email?.trim().toLowerCase() ?? "";
+  const isAdmin = userEmail === ADMIN_EMAIL.toLowerCase();
 
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -240,14 +241,11 @@ const Orders = () => {
       try {
         const ordersCollection = collection(firestoreDb, "orders");
 
-        // Admin: all orders.
-        // Customer: only orders belonging to their UID.
+        // Admin: every order from every user.
+        // Customer: compare each order's userId with the Firebase UID.
         const ordersQuery = isAdmin
           ? query(ordersCollection)
-          : query(
-              ordersCollection,
-              where("userId", "==", user.id)
-            );
+          : query(ordersCollection, where("userId", "==", user.id));
 
         const snapshot = await getDocs(ordersQuery);
 
@@ -256,12 +254,8 @@ const Orders = () => {
         );
 
         fetchedOrders.sort((a, b) => {
-          const dateA = a.createdAt
-            ? new Date(a.createdAt).getTime()
-            : 0;
-          const dateB = b.createdAt
-            ? new Date(b.createdAt).getTime()
-            : 0;
+          const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
 
           return dateB - dateA;
         });
@@ -290,7 +284,7 @@ const Orders = () => {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, user?.isAdmin, authLoading, isAdmin]);
+  }, [user?.id, user?.email, authLoading, isAdmin]);
 
   if (authLoading || loading) {
     return (
@@ -384,9 +378,7 @@ const Orders = () => {
           className="mb-10"
         >
           <h1 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight mb-2">
-            {isAdmin
-              ? "All Customer Orders"
-              : "Order History & Tracking"}
+            {isAdmin ? "All Customer Orders" : "Order History & Tracking"}
           </h1>
 
           <p className="text-muted-foreground font-medium">
@@ -397,9 +389,7 @@ const Orders = () => {
 
           <p className="text-xs text-muted-foreground mt-2">
             {orders.length} {orders.length === 1 ? "order" : "orders"} found
-            {isAdmin
-              ? " across all customers."
-              : " for your account."}
+            {isAdmin ? " across all customers." : " for your account."}
           </p>
         </motion.div>
 
@@ -460,7 +450,9 @@ const Orders = () => {
                       </span>
                     </div>
 
-                    <div className={`flex items-center gap-2 px-4 py-2 rounded-full ${statusInfo.bg}`}>
+                    <div
+                      className={`flex items-center gap-2 px-4 py-2 rounded-full ${statusInfo.bg}`}
+                    >
                       <StatusIcon className={`h-4 w-4 ${statusInfo.color}`} />
                       <span className={`text-sm font-bold ${statusInfo.color}`}>
                         {order.status}
@@ -527,7 +519,13 @@ const Orders = () => {
                               </div>
 
                               <div>
-                                <p className={`text-xs font-bold ${isDone ? "text-foreground" : "text-muted-foreground"}`}>
+                                <p
+                                  className={`text-xs font-bold ${
+                                    isDone
+                                      ? "text-foreground"
+                                      : "text-muted-foreground"
+                                  }`}
+                                >
                                   {step.label}
                                 </p>
 
@@ -566,12 +564,11 @@ const Orders = () => {
                             >
                               <div className="flex flex-wrap justify-between items-start gap-2">
                                 <div className="flex-1 min-w-0">
-                                  <p className="font-medium">
-                                    {item.name}
-                                  </p>
+                                  <p className="font-medium">{item.name}</p>
 
                                   <p className="text-muted-foreground text-xs mt-1">
-                                    Qty: {item.quantity} × ₹{formatPrice(item.price)}
+                                    Qty: {item.quantity} × ₹
+                                    {formatPrice(item.price)}
                                   </p>
                                 </div>
 
@@ -587,28 +584,33 @@ const Orders = () => {
                                       PC Build Components
                                     </p>
 
-                                    {item.components!.map((component, componentIndex) => (
-                                      <div
-                                        key={`${component.category}-${component.id || componentIndex}`}
-                                        className="flex flex-wrap justify-between gap-2 text-xs"
-                                      >
-                                        <div className="min-w-0">
-                                          <p>
-                                            {component.category}: {component.name}
-                                          </p>
+                                    {item.components!.map(
+                                      (component, componentIndex) => (
+                                        <div
+                                          key={`${component.category}-${
+                                            component.id || componentIndex
+                                          }`}
+                                          className="flex flex-wrap justify-between gap-2 text-xs"
+                                        >
+                                          <div className="min-w-0">
+                                            <p>
+                                              {component.category}:{" "}
+                                              {component.name}
+                                            </p>
 
-                                          <p className="text-muted-foreground mt-0.5">
-                                            {[component.brand, component.specs]
-                                              .filter(Boolean)
-                                              .join(" · ")}
-                                          </p>
+                                            <p className="text-muted-foreground mt-0.5">
+                                              {[component.brand, component.specs]
+                                                .filter(Boolean)
+                                                .join(" · ")}
+                                            </p>
+                                          </div>
+
+                                          <span className="text-muted-foreground shrink-0">
+                                            ₹{formatPrice(component.price)}
+                                          </span>
                                         </div>
-
-                                        <span className="text-muted-foreground shrink-0">
-                                          ₹{formatPrice(component.price)}
-                                        </span>
-                                      </div>
-                                    ))}
+                                      )
+                                    )}
                                   </div>
                                 )}
                             </div>
